@@ -1,0 +1,25 @@
+[package]
+name = "toolbox"
+version = "0.1.0"
+description = "Toolbox — an all-in-one AI tools platform"
+edition = "2021"
+
+[lib]
+name = "toolbox_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+ureq = "2"
+flate2 = "1"
+tar = "0.4"

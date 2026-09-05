@@ -1,0 +1,94 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg2://toolbox:toolbox@postgres:5432/toolbox
+      OLLAMA_URL: http://ollama:11434
+      R2_BUCKET: ${R2_BUCKET:-toolbox-builds}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_ACCESS_KEY: ${R2_ACCESS_KEY:-}
+      R2_SECRET_KEY: ${R2_SECRET_KEY:-}
+      CLAMAV_HOST: clamav
+      BUILD_WORKDIR: /tmp/toolbox-builds
+    volumes:
+      - build-workdir:/tmp/toolbox-builds
+    depends_on:
+      - redis
+      - postgres
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg2://toolbox:toolbox@postgres:5432/toolbox
+      OLLAMA_URL: http://ollama:11434
+      R2_BUCKET: ${R2_BUCKET:-toolbox-builds}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_ACCESS_KEY: ${R2_ACCESS_KEY:-}
+      R2_SECRET_KEY: ${R2_SECRET_KEY:-}
+      CLAMAV_HOST: clamav
+      BUILD_WORKDIR: /tmp/toolbox-builds
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - build-workdir:/tmp/toolbox-builds
+    depends_on:
+      - redis
+      - postgres
+      - ollama
+      - clamav
+    command: celery -A worker.celery_app worker --loglevel=info --concurrency=2
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: toolbox
+      POSTGRES_PASSWORD: toolbox
+      POSTGRES_DB: toolbox
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+  ollama-init:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: ollama:11434
+    depends_on:
+      - ollama
+    entrypoint: >
+      sh -c "
+      until ollama list >/dev/null 2>&1; do sleep 2; done;
+      ollama pull llama3.1:8b;
+      ollama pull qwen2.5-coder:7b
+      "
+    restart: "no"
+
+  clamav:
+    image: clamav/clamav:latest
+    ports:
+      - "3310:3310"
+    volumes:
+      - build-workdir:/tmp/toolbox-builds
+      - clamav-data:/var/lib/clamav
+
+volumes:
+  postgres-data:
+  ollama-data:
+  clamav-data:
+  build-workdir:
