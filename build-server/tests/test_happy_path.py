@@ -67,7 +67,7 @@ class _FakeChat:
         self.completions = _FakeCompletions(response_text)
 
 
-class _FakeQwenClient:
+class _FakeOpenRouterClient:
     """Mimics the shape of openai.OpenAI enough for chat.completions.create."""
 
     def __init__(self, response_text: str):
@@ -169,7 +169,7 @@ def test_happy_path_build_produces_a_valid_manifest(db_session):
         clone=_fake_clone,
         docker_client_factory=lambda: fake_docker,
         github_client=_FakeGithubClient(),
-        llm_client=_FakeQwenClient(readme_json),
+        llm_client=_FakeOpenRouterClient(readme_json),
         s3_client_factory=lambda: _FakeS3Client(),
         scan_send_command=_fake_scan,
     )

@@ -48,7 +48,7 @@ class _FakeChat:
         self.completions = _FakeCompletions(response_text)
 
 
-class _FakeQwenClient:
+class _FakeOpenRouterClient:
     """Mimics the shape of openai.OpenAI enough for chat.completions.create."""
 
     def __init__(self, response_text: str):
@@ -70,7 +70,7 @@ def test_parse_readme_extracts_entry_point_from_a_real_simple_readme():
             "confidence": 0.87,
         }
     )
-    client = _FakeQwenClient(fake_llm_output)
+    client = _FakeOpenRouterClient(fake_llm_output)
 
     analysis = parse_readme(SIMPLE_README, client=client)
 
@@ -79,12 +79,16 @@ def test_parse_readme_extracts_entry_point_from_a_real_simple_readme():
     assert analysis.system_deps == ["ffmpeg"]
     assert analysis.run_command == "python app.py"
     assert analysis.confidence == 0.87
-    assert client.last_payload["model"] == get_settings().qwen_model
+    assert client.last_payload["model"] == get_settings().openrouter_readme_model
+    assert client.last_payload["extra_headers"] == {
+        "HTTP-Referer": get_settings().openrouter_referer,
+        "X-Title": get_settings().openrouter_title,
+    }
 
 
 def test_parse_readme_tolerates_prose_wrapped_around_the_json():
     wrapped = 'Sure, here is the analysis:\n{"entry_point": "app.py", "confidence": 0.7}\nHope that helps!'
-    client = _FakeQwenClient(wrapped)
+    client = _FakeOpenRouterClient(wrapped)
 
     analysis = parse_readme(SIMPLE_README, client=client)
 
@@ -93,7 +97,7 @@ def test_parse_readme_tolerates_prose_wrapped_around_the_json():
 
 
 def test_parse_readme_falls_back_to_zero_confidence_on_unparseable_response():
-    client = _FakeQwenClient("this is not json at all")
+    client = _FakeOpenRouterClient("this is not json at all")
 
     analysis = parse_readme(SIMPLE_README, client=client)
 

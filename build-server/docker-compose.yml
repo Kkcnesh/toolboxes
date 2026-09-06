@@ -7,7 +7,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg2://toolbox:toolbox@postgres:5432/toolbox
-      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       R2_BUCKET: ${R2_BUCKET:-toolbox-builds}
       R2_ENDPOINT: ${R2_ENDPOINT:-}
       R2_ACCESS_KEY: ${R2_ACCESS_KEY:-}
@@ -29,7 +29,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg2://toolbox:toolbox@postgres:5432/toolbox
-      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       R2_BUCKET: ${R2_BUCKET:-toolbox-builds}
       R2_ENDPOINT: ${R2_ENDPOINT:-}
       R2_ACCESS_KEY: ${R2_ACCESS_KEY:-}

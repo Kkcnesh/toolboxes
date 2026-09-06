@@ -21,22 +21,26 @@ class LLMError(RuntimeError):
     pass
 
 
-def _qwen_generate(prompt: str, *, client: Optional[OpenAI] = None) -> str:
+def _openrouter_generate(prompt: str, *, client: Optional[OpenAI] = None) -> str:
     settings = get_settings()
 
     try:
-        active_client = client or OpenAI(api_key=settings.qwen_api_key, base_url=settings.qwen_base_url)
+        active_client = client or OpenAI(api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url)
         completion = active_client.chat.completions.create(
-            model=settings.qwen_model,
+            model=settings.openrouter_readme_model,
             messages=[{"role": "user", "content": prompt}],
             timeout=settings.llm_timeout_seconds,
+            extra_headers={
+                "HTTP-Referer": settings.openrouter_referer,
+                "X-Title": settings.openrouter_title,
+            },
         )
+        text = completion.choices[0].message.content or ""
     except Exception as exc:
-        raise LLMError(f"Qwen request failed: {exc}") from exc
+        raise LLMError(f"OpenRouter request failed: {exc}") from exc
 
-    text = completion.choices[0].message.content or ""
     if not text:
-        raise LLMError("Qwen returned an empty response")
+        raise LLMError("OpenRouter returned an empty response")
     return text
 
 
@@ -57,7 +61,7 @@ def _extract_json_object(text: str) -> dict:
 
 
 def parse_readme(readme_text: str, *, client: Optional[OpenAI] = None) -> ReadmeAnalysis:
-    """Read a project's README with Qwen and extract a build spec.
+    """Read a project's README via OpenRouter and extract a build spec.
 
     Falls back to a zero-confidence, minimal-guess analysis whenever the model
     is unreachable or doesn't return parseable JSON - the caller decides what
@@ -78,7 +82,7 @@ def parse_readme(readme_text: str, *, client: Optional[OpenAI] = None) -> Readme
     )
 
     try:
-        raw = _qwen_generate(prompt, client=client)
+        raw = _openrouter_generate(prompt, client=client)
         data = _extract_json_object(raw)
         return ReadmeAnalysis.model_validate(data)
     except (LLMError, ValueError):

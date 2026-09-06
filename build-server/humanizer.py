@@ -38,18 +38,24 @@ async def _ask_llm_for_summary(raw_log: str, *, client: Optional[AsyncOpenAI] = 
     )
 
     try:
-        active_client = client or AsyncOpenAI(api_key=settings.qwen_api_key, base_url=settings.qwen_base_url)
+        active_client = client or AsyncOpenAI(
+            api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url
+        )
         completion = await active_client.chat.completions.create(
-            model=settings.qwen_model,
+            model=settings.openrouter_fix_model,
             messages=[{"role": "user", "content": prompt}],
             timeout=settings.llm_timeout_seconds,
+            extra_headers={
+                "HTTP-Referer": settings.openrouter_referer,
+                "X-Title": settings.openrouter_title,
+            },
         )
+        text = completion.choices[0].message.content or ""
     except Exception as exc:
-        raise HumanizeError(f"Qwen request failed: {exc}") from exc
+        raise HumanizeError(f"OpenRouter request failed: {exc}") from exc
 
-    text = completion.choices[0].message.content or ""
     if not text:
-        raise HumanizeError("Qwen returned an empty response")
+        raise HumanizeError("OpenRouter returned an empty response")
     return text
 
 

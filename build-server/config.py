@@ -17,9 +17,12 @@ class Settings(BaseSettings):
     r2_access_key: str = ""
     r2_secret_key: str = ""
 
-    qwen_api_key: str = ""
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen3.6-flash"
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_readme_model: str = "qwen/qwen-2.5-72b-instruct:free"
+    openrouter_fix_model: str = "qwen/qwen-2.5-coder-32b-instruct"
+    openrouter_referer: str = "https://toolbox.app"
+    openrouter_title: str = "Toolbox"
 
     readme_confidence_floor: float = 0.5
     preflight_entry_point_confidence_floor: float = 0.4
