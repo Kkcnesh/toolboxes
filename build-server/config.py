@@ -19,8 +19,8 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_readme_model: str = "qwen/qwen-2.5-72b-instruct:free"
-    openrouter_fix_model: str = "qwen/qwen-2.5-coder-32b-instruct"
+    openrouter_readme_model: str = "qwen/qwen3.7-flash"
+    openrouter_fix_model: str = "qwen/qwen3-coder-30b-a3b-instruct"
     openrouter_referer: str = "https://toolbox.app"
     openrouter_title: str = "Toolbox"
 

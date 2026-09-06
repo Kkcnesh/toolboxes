@@ -111,7 +111,17 @@ def execute_build(
         github_url = build.github_url
         platform = build.platform
 
-    workdir = Path(tempfile.mkdtemp(prefix="toolbox-build-"))
+    # staging_dir must live under settings.build_workdir specifically, not the
+    # container's default temp dir - that path is a volume shared with the
+    # clamav service (Step 5 scans it by path over the network), and only the
+    # portion of the filesystem under build_workdir is actually shared.
+    Path(settings.build_workdir).mkdir(parents=True, exist_ok=True)
+    workdir = Path(tempfile.mkdtemp(prefix="toolbox-build-", dir=settings.build_workdir))
+    # mkdtemp defaults to 0700, readable only by the (root) worker process.
+    # clamd drops privileges to run as its own unprivileged "clamav" user, so
+    # without opening this up it can't even traverse into the directory to
+    # scan it - not a virus flag, just a permission wall.
+    workdir.chmod(0o755)
     repo_dir = workdir / "repo"
     staging_dir = workdir / "staging"
     docker_client = None
@@ -127,6 +137,10 @@ def execute_build(
         _update_build(build_id, status="reading", current_step="Reading the project's documentation")
         readme_text = read_readme(repo_dir)
         analysis = readme_parser.parse_readme(readme_text, client=llm_client)
+
+        declared_python_version = readme_parser.detect_declared_python_version(repo_dir)
+        if declared_python_version:
+            analysis.python_version = declared_python_version
 
         if analysis.confidence < settings.readme_confidence_floor:
             _fail_build(build_id, "We couldn't figure out how to run this tool automatically.", already_human=True)

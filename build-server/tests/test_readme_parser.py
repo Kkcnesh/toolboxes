@@ -1,7 +1,7 @@
 import json
 
 from config import get_settings
-from pipeline.readme_parser import parse_readme
+from pipeline.readme_parser import detect_declared_python_version, parse_readme
 
 SIMPLE_README = """
 # Transcribe Tool
@@ -103,3 +103,23 @@ def test_parse_readme_falls_back_to_zero_confidence_on_unparseable_response():
 
     assert analysis.confidence == 0.0
     assert analysis.entry_point is None
+
+
+def test_detect_declared_python_version_reads_pyproject_requires_python(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "yt-dlp"\nrequires-python = ">=3.10"\n'
+    )
+
+    assert detect_declared_python_version(tmp_path) == "3.10"
+
+
+def test_detect_declared_python_version_reads_setup_cfg_python_requires(tmp_path):
+    (tmp_path / "setup.cfg").write_text("[options]\npython_requires = >=3.8\n")
+
+    assert detect_declared_python_version(tmp_path) == "3.8"
+
+
+def test_detect_declared_python_version_returns_none_when_undeclared(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "some-tool"\n')
+
+    assert detect_declared_python_version(tmp_path) is None

@@ -43,12 +43,14 @@ def _reject(code: str) -> PreflightVerdict:
 
 
 def _has_python_files(repo_dir: Path) -> bool:
-    if any(repo_dir.glob("*.py")):
-        return True
-    src_dir = repo_dir / "src"
-    if src_dir.is_dir() and any(src_dir.rglob("*.py")):
-        return True
-    return False
+    """Whether this repo contains any Python code at all.
+
+    Checking only the repo root or a src/ folder rejects perfectly valid
+    projects that keep their code in a package directory named after the
+    project itself (e.g. yt-dlp's own code lives under yt_dlp/, not src/) -
+    so this scans the whole shallow-cloned tree instead.
+    """
+    return any(repo_dir.rglob("*.py"))
 
 
 def _resolve_entry_point(repo_dir: Path, reported: Optional[str]) -> Optional[str]:

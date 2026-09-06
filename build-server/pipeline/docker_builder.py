@@ -140,6 +140,12 @@ class BuildOutcome(BaseModel):
 
 
 def render_dockerfile(context: BuildContext) -> str:
+    # --copies is required: a default venv symlinks venv/bin/python to the
+    # interpreter's absolute path inside this throwaway build container (e.g.
+    # /usr/local/bin/python). That path won't exist once the bundle is
+    # extracted anywhere else - not in the scanning container, and not on an
+    # end user's machine, where it's the whole reason the bundle would fail
+    # to run at all. --copies makes the interpreter a real, portable file.
     apt_line = ""
     if context.apt_packages:
         packages = " ".join(context.apt_packages)
@@ -155,7 +161,7 @@ def render_dockerfile(context: BuildContext) -> str:
         f"{apt_line}"
         "WORKDIR /build\n"
         "COPY repo/ repo/\n"
-        "RUN python -m venv /output/venv\n"
+        "RUN python -m venv --copies /output/venv\n"
         "RUN /output/venv/bin/pip install --upgrade pip\n"
         f"RUN /output/venv/bin/pip install {pip_flags_prefix}-r repo/requirements.txt || "
         f"/output/venv/bin/pip install {pip_flags_prefix}-e repo/ || "

@@ -79,6 +79,14 @@ services:
   clamav:
     image: clamav/clamav:latest
     platform: linux/amd64
+    environment:
+      # A build's own venv legitimately contains symlinks (venv/lib64 -> lib,
+      # etc.) that stay within the scanned tree. Without this, clamd refuses
+      # to scan the path at all rather than just skipping those entries -
+      # safe to allow here since we're scanning our own build output, not
+      # untrusted user uploads.
+      CLAMD_CONF_FollowDirectorySymlinks: "yes"
+      CLAMD_CONF_FollowFileSymlinks: "yes"
     ports:
       - "3310:3310"
     volumes:

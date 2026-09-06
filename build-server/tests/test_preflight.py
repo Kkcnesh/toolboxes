@@ -4,6 +4,7 @@ from pathlib import Path
 from pipeline.preflight import (
     GPU_REQUIRED,
     INACTIVE_UNPOPULAR,
+    NO_ENTRY_POINT,
     NO_PYTHON_CODE,
     classify_repo,
 )
@@ -85,6 +86,32 @@ def test_rejects_repo_with_no_entry_point_and_low_confidence(tmp_path):
     )
 
     assert verdict.is_red is True
+    assert verdict.reason_code == NO_ENTRY_POINT
+
+
+def test_accepts_python_code_that_lives_in_a_package_dir_not_src(tmp_path):
+    """Real repos like yt-dlp keep their code under a package dir named after
+    the project (e.g. yt_dlp/) rather than root or src/ - that must not be
+    mistaken for "no Python code"."""
+    repo = _make_repo(
+        tmp_path,
+        {
+            "yt_dlp/__init__.py": "",
+            "yt_dlp/YoutubeDL.py": "class YoutubeDL:\n    pass\n",
+            "README.md": "A command-line tool to download videos.",
+        },
+    )
+    analysis = ReadmeAnalysis(entry_point="yt_dlp/__init__.py", confidence=0.8)
+
+    verdict = classify_repo(
+        repo,
+        "A command-line tool to download videos.",
+        analysis,
+        github_url="https://github.com/yt-dlp/yt-dlp",
+        http_client=_FakeGithubClient(stars=90000),
+    )
+
+    assert verdict.is_red is False
 
 
 def test_rejects_inactive_and_unpopular_repo(tmp_path):

@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
@@ -94,3 +95,49 @@ def parse_readme(readme_text: str, *, client: Optional[OpenAI] = None) -> Readme
             description="",
             confidence=0.0,
         )
+
+
+def _parse_min_version_from_specifier(specifier: str) -> Optional[str]:
+    match = re.search(r">=\s*(\d+\.\d+)", specifier)
+    if match:
+        return match.group(1)
+    match = re.search(r"==\s*(\d+\.\d+)", specifier)
+    if match:
+        return match.group(1)
+    return None
+
+
+def detect_declared_python_version(repo_dir: Path) -> Optional[str]:
+    """Look for a project-declared minimum Python version in pyproject.toml's
+    `requires-python` or setup.cfg's `python_requires`.
+
+    This is a far more reliable signal than an LLM's guess from README prose -
+    a repo like yt-dlp declares `requires-python = ">=3.10"` explicitly, and
+    trusting that over a guess avoids packaging it against a Python version
+    its own dependencies will refuse to install under.
+    """
+    pyproject = repo_dir / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            text = pyproject.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            text = ""
+        match = re.search(r'requires-python\s*=\s*["\']([^"\']+)["\']', text)
+        if match:
+            version = _parse_min_version_from_specifier(match.group(1))
+            if version:
+                return version
+
+    setup_cfg = repo_dir / "setup.cfg"
+    if setup_cfg.is_file():
+        try:
+            text = setup_cfg.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            text = ""
+        match = re.search(r"python_requires\s*=\s*([^\n]+)", text)
+        if match:
+            version = _parse_min_version_from_specifier(match.group(1))
+            if version:
+                return version
+
+    return None
