@@ -7,7 +7,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg2://toolbox:toolbox@postgres:5432/toolbox
-      OLLAMA_URL: http://ollama:11434
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
       R2_BUCKET: ${R2_BUCKET:-toolbox-builds}
       R2_ENDPOINT: ${R2_ENDPOINT:-}
       R2_ACCESS_KEY: ${R2_ACCESS_KEY:-}
@@ -17,8 +17,10 @@ services:
     volumes:
       - build-workdir:/tmp/toolbox-builds
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -27,7 +29,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg2://toolbox:toolbox@postgres:5432/toolbox
-      OLLAMA_URL: http://ollama:11434
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
       R2_BUCKET: ${R2_BUCKET:-toolbox-builds}
       R2_ENDPOINT: ${R2_ENDPOINT:-}
       R2_ACCESS_KEY: ${R2_ACCESS_KEY:-}
@@ -38,20 +40,27 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - build-workdir:/tmp/toolbox-builds
     depends_on:
-      - redis
-      - postgres
-      - ollama
-      - clamav
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clamav:
+        condition: service_started
     command: celery -A worker.celery_app worker --loglevel=info --concurrency=2
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-bookworm
     platform: linux/arm64
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-bookworm
     platform: linux/arm64
     environment:
       POSTGRES_USER: toolbox
@@ -61,29 +70,11 @@ services:
       - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-
-  ollama:
-    image: ollama/ollama:latest
-    platform: linux/arm64
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-
-  ollama-init:
-    image: ollama/ollama:latest
-    platform: linux/arm64
-    environment:
-      OLLAMA_HOST: ollama:11434
-    depends_on:
-      - ollama
-    entrypoint: >
-      sh -c "
-      until ollama list >/dev/null 2>&1; do sleep 2; done;
-      ollama pull llama3.1:8b;
-      ollama pull qwen2.5-coder:7b
-      "
-    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toolbox -d toolbox"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   clamav:
     image: clamav/clamav:latest
@@ -96,6 +87,5 @@ services:
 
 volumes:
   postgres-data:
-  ollama-data:
   clamav-data:
   build-workdir:

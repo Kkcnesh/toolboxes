@@ -11,15 +11,15 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql+psycopg2://toolbox:toolbox@localhost:5432/toolbox"
-    ollama_url: str = "http://localhost:11434"
 
     r2_bucket: str = "toolbox-builds"
     r2_endpoint: str = ""
     r2_access_key: str = ""
     r2_secret_key: str = ""
 
-    ollama_readme_model: str = "llama3.1:8b"
-    ollama_fix_model: str = "qwen2.5-coder:7b"
+    qwen_api_key: str = ""
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen3.6-flash"
 
     readme_confidence_floor: float = 0.5
     preflight_entry_point_confidence_floor: float = 0.4

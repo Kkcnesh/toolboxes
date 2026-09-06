@@ -83,8 +83,14 @@ def _update_build(build_id: str, **fields) -> None:
             setattr(build, key, value)
 
 
-def _fail_build(build_id: str, raw_or_human_message: str, *, already_human: bool = False) -> None:
-    message = raw_or_human_message if already_human else asyncio.run(humanize_error(raw_or_human_message))
+def _fail_build(
+    build_id: str, raw_or_human_message: str, *, already_human: bool = False, llm_client: Optional[object] = None
+) -> None:
+    message = (
+        raw_or_human_message
+        if already_human
+        else asyncio.run(humanize_error(raw_or_human_message, client=llm_client))
+    )
     _update_build(build_id, status="failed", current_step="Failed", error_message=message, finished_at=_now())
 
 
@@ -93,7 +99,8 @@ def execute_build(
     *,
     clone: Callable[[str, Path], None] = clone_repo,
     docker_client_factory: Optional[Callable[[], object]] = None,
-    http_client: Optional[httpx.Client] = None,
+    github_client: Optional[httpx.Client] = None,
+    llm_client: Optional[object] = None,
     s3_client_factory: Optional[Callable[[], object]] = None,
     scan_send_command: Optional[Callable[[str, str], str]] = None,
 ) -> None:
@@ -119,13 +126,13 @@ def execute_build(
 
         _update_build(build_id, status="reading", current_step="Reading the project's documentation")
         readme_text = read_readme(repo_dir)
-        analysis = readme_parser.parse_readme(readme_text, client=http_client)
+        analysis = readme_parser.parse_readme(readme_text, client=llm_client)
 
         if analysis.confidence < settings.readme_confidence_floor:
             _fail_build(build_id, "We couldn't figure out how to run this tool automatically.", already_human=True)
             return
 
-        verdict = preflight.classify_repo(repo_dir, readme_text, analysis, github_url=github_url, http_client=http_client)
+        verdict = preflight.classify_repo(repo_dir, readme_text, analysis, github_url=github_url, http_client=github_client)
         if verdict.is_red:
             with session_scope() as session:
                 session.add(BuildRejection(github_url=github_url, reason_code=verdict.reason_code, reason_human=verdict.reason_human))
@@ -172,14 +179,18 @@ def execute_build(
                 break
 
             with session_scope() as session:
-                fix, _from_kb = recovery.get_fix(session, outcome.log, context.as_dict(), client=http_client)
+                fix, _from_kb = recovery.get_fix(session, outcome.log, context.as_dict(), client=llm_client)
 
             context = docker_builder.apply_fix(fix, context, repo_dir)
             pending_fix = fix
             pending_fingerprint = recovery.fingerprint_error(outcome.log)
 
         if outcome is None or not outcome.success:
-            _fail_build(build_id, outcome.log if outcome else "The build failed before it could start.")
+            _fail_build(
+                build_id,
+                outcome.log if outcome else "The build failed before it could start.",
+                llm_client=llm_client,
+            )
             return
 
         manifest = docker_builder.write_bundle_metadata(
@@ -207,7 +218,7 @@ def execute_build(
         )
 
     except Exception as exc:  # last-resort safety net: never leak a raw exception into error_message
-        _fail_build(build_id, str(exc))
+        _fail_build(build_id, str(exc), llm_client=llm_client)
     finally:
         if docker_client is not None:
             try:

@@ -18,28 +18,45 @@ Requires ffmpeg to be installed.
 """
 
 
-class _FakeResponse:
-    def __init__(self, payload: dict):
-        self._payload = payload
-
-    def raise_for_status(self):
-        pass
-
-    def json(self):
-        return self._payload
+class _FakeMessage:
+    def __init__(self, content: str):
+        self.content = content
 
 
-class _FakeOllamaClient:
+class _FakeChoice:
+    def __init__(self, content: str):
+        self.message = _FakeMessage(content)
+
+
+class _FakeCompletion:
+    def __init__(self, content: str):
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeCompletions:
     def __init__(self, response_text: str):
         self._response_text = response_text
-        self.last_payload = None
+        self.last_kwargs: dict = {}
 
-    def post(self, url, json=None):
-        self.last_payload = json
-        return _FakeResponse({"response": self._response_text})
+    def create(self, **kwargs):
+        self.last_kwargs = kwargs
+        return _FakeCompletion(self._response_text)
 
-    def close(self):
-        pass
+
+class _FakeChat:
+    def __init__(self, response_text: str):
+        self.completions = _FakeCompletions(response_text)
+
+
+class _FakeQwenClient:
+    """Mimics the shape of openai.OpenAI enough for chat.completions.create."""
+
+    def __init__(self, response_text: str):
+        self.chat = _FakeChat(response_text)
+
+    @property
+    def last_payload(self) -> dict:
+        return self.chat.completions.last_kwargs
 
 
 def test_parse_readme_extracts_entry_point_from_a_real_simple_readme():
@@ -53,7 +70,7 @@ def test_parse_readme_extracts_entry_point_from_a_real_simple_readme():
             "confidence": 0.87,
         }
     )
-    client = _FakeOllamaClient(fake_llm_output)
+    client = _FakeQwenClient(fake_llm_output)
 
     analysis = parse_readme(SIMPLE_README, client=client)
 
@@ -62,12 +79,12 @@ def test_parse_readme_extracts_entry_point_from_a_real_simple_readme():
     assert analysis.system_deps == ["ffmpeg"]
     assert analysis.run_command == "python app.py"
     assert analysis.confidence == 0.87
-    assert client.last_payload["model"] == get_settings().ollama_readme_model
+    assert client.last_payload["model"] == get_settings().qwen_model
 
 
 def test_parse_readme_tolerates_prose_wrapped_around_the_json():
     wrapped = 'Sure, here is the analysis:\n{"entry_point": "app.py", "confidence": 0.7}\nHope that helps!'
-    client = _FakeOllamaClient(wrapped)
+    client = _FakeQwenClient(wrapped)
 
     analysis = parse_readme(SIMPLE_README, client=client)
 
@@ -76,7 +93,7 @@ def test_parse_readme_tolerates_prose_wrapped_around_the_json():
 
 
 def test_parse_readme_falls_back_to_zero_confidence_on_unparseable_response():
-    client = _FakeOllamaClient("this is not json at all")
+    client = _FakeQwenClient("this is not json at all")
 
     analysis = parse_readme(SIMPLE_README, client=client)
 

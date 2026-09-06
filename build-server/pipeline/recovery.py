@@ -3,7 +3,7 @@ import json
 import re
 from typing import Optional
 
-import httpx
+from openai import OpenAI
 from pydantic import BaseModel, Field
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
@@ -79,28 +79,22 @@ def record_fix_outcome(
     return existing
 
 
-def _ollama_generate(model: str, prompt: str, *, client: Optional[httpx.Client] = None) -> str:
+def _qwen_generate(prompt: str, *, client: Optional[OpenAI] = None) -> str:
     settings = get_settings()
-    owns_client = client is None
-    http_client = client or httpx.Client(timeout=settings.llm_timeout_seconds)
 
     try:
-        try:
-            response = http_client.post(
-                f"{settings.ollama_url}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False, "format": "json"},
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise LLMError(f"Ollama request failed: {exc}") from exc
-    finally:
-        if owns_client:
-            http_client.close()
+        active_client = client or OpenAI(api_key=settings.qwen_api_key, base_url=settings.qwen_base_url)
+        completion = active_client.chat.completions.create(
+            model=settings.qwen_model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=settings.llm_timeout_seconds,
+        )
+    except Exception as exc:
+        raise LLMError(f"Qwen request failed: {exc}") from exc
 
-    data = response.json()
-    text = data.get("response", "")
+    text = completion.choices[0].message.content or ""
     if not text:
-        raise LLMError("Ollama returned an empty response")
+        raise LLMError("Qwen returned an empty response")
     return text
 
 
@@ -118,8 +112,7 @@ def _extract_json_object(text: str) -> dict:
     raise LLMError("Could not parse JSON out of the model's response")
 
 
-def suggest_fix_via_llm(error_log: str, context: dict, *, client: Optional[httpx.Client] = None) -> FixSuggestion:
-    settings = get_settings()
+def suggest_fix_via_llm(error_log: str, context: dict, *, client: Optional[OpenAI] = None) -> FixSuggestion:
     prompt = (
         "A Docker build that packages a Python project into a portable virtual environment "
         "just failed. Suggest ONE concrete fix. Respond with ONLY a JSON object (no prose) "
@@ -133,7 +126,7 @@ def suggest_fix_via_llm(error_log: str, context: dict, *, client: Optional[httpx
     )
 
     try:
-        raw = _ollama_generate(settings.ollama_fix_model, prompt, client=client)
+        raw = _qwen_generate(prompt, client=client)
         data = _extract_json_object(raw)
         return FixSuggestion.model_validate(data)
     except (LLMError, ValueError):
@@ -141,7 +134,7 @@ def suggest_fix_via_llm(error_log: str, context: dict, *, client: Optional[httpx
 
 
 def get_fix(
-    session: Session, error_log: str, context: dict, *, client: Optional[httpx.Client] = None
+    session: Session, error_log: str, context: dict, *, client: Optional[OpenAI] = None
 ) -> tuple[FixSuggestion, bool]:
     """Return (fix, came_from_knowledge_base). Checks the fix knowledge base first,
     skipping the LLM entirely when a fix with more successes than failures exists."""

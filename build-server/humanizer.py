@@ -1,6 +1,6 @@
 from typing import Optional
 
-import httpx
+from openai import AsyncOpenAI
 
 from config import get_settings
 
@@ -28,7 +28,7 @@ class HumanizeError(RuntimeError):
     pass
 
 
-async def _ask_llm_for_summary(raw_log: str, *, client: Optional[httpx.AsyncClient] = None) -> str:
+async def _ask_llm_for_summary(raw_log: str, *, client: Optional[AsyncOpenAI] = None) -> str:
     settings = get_settings()
     prompt = (
         "Translate the build error log below into exactly ONE short sentence a non-technical "
@@ -37,28 +37,23 @@ async def _ask_llm_for_summary(raw_log: str, *, client: Optional[httpx.AsyncClie
         f"Error log:\n{raw_log[-3000:]}"
     )
 
-    owns_client = client is None
-    http_client = client or httpx.AsyncClient(timeout=settings.llm_timeout_seconds)
     try:
-        response = await http_client.post(
-            f"{settings.ollama_url}/api/generate",
-            json={"model": settings.ollama_fix_model, "prompt": prompt, "stream": False},
+        active_client = client or AsyncOpenAI(api_key=settings.qwen_api_key, base_url=settings.qwen_base_url)
+        completion = await active_client.chat.completions.create(
+            model=settings.qwen_model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=settings.llm_timeout_seconds,
         )
-        response.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise HumanizeError(f"Ollama request failed: {exc}") from exc
-    finally:
-        if owns_client:
-            await http_client.aclose()
+    except Exception as exc:
+        raise HumanizeError(f"Qwen request failed: {exc}") from exc
 
-    data = response.json()
-    text = data.get("response", "")
+    text = completion.choices[0].message.content or ""
     if not text:
-        raise HumanizeError("Ollama returned an empty response")
+        raise HumanizeError("Qwen returned an empty response")
     return text
 
 
-async def humanize_error(raw_log: str, *, client: Optional[httpx.AsyncClient] = None) -> str:
+async def humanize_error(raw_log: str, *, client: Optional[AsyncOpenAI] = None) -> str:
     """Translate a raw build error log into a single plain-English sentence.
 
     Called before every status update that sets `error_message`. Never returns

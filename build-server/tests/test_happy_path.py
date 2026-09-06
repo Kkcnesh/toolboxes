@@ -31,20 +31,47 @@ class _FakeResponse:
         return self._payload
 
 
-class _FakeHttpClient:
-    """Serves both the Ollama README-parse call and the GitHub activity call."""
-
-    def __init__(self, readme_json: str):
-        self._readme_json = readme_json
-
+class _FakeGithubClient:
     def get(self, url, headers=None):
         return _FakeResponse(200, {"stargazers_count": 500, "pushed_at": "2024-06-01T00:00:00Z"})
 
-    def post(self, url, json=None):
-        return _FakeResponse(200, {"response": self._readme_json})
-
     def close(self):
         pass
+
+
+class _FakeMessage:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class _FakeChoice:
+    def __init__(self, content: str):
+        self.message = _FakeMessage(content)
+
+
+class _FakeCompletion:
+    def __init__(self, content: str):
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeCompletions:
+    def __init__(self, response_text: str):
+        self._response_text = response_text
+
+    def create(self, **kwargs):
+        return _FakeCompletion(self._response_text)
+
+
+class _FakeChat:
+    def __init__(self, response_text: str):
+        self.completions = _FakeCompletions(response_text)
+
+
+class _FakeQwenClient:
+    """Mimics the shape of openai.OpenAI enough for chat.completions.create."""
+
+    def __init__(self, response_text: str):
+        self.chat = _FakeChat(response_text)
 
 
 class _FakeContainer:
@@ -141,7 +168,8 @@ def test_happy_path_build_produces_a_valid_manifest(db_session):
         "test-build-1",
         clone=_fake_clone,
         docker_client_factory=lambda: fake_docker,
-        http_client=_FakeHttpClient(readme_json),
+        github_client=_FakeGithubClient(),
+        llm_client=_FakeQwenClient(readme_json),
         s3_client_factory=lambda: _FakeS3Client(),
         scan_send_command=_fake_scan,
     )

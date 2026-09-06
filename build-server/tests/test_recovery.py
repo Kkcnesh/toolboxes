@@ -2,11 +2,21 @@ from db import BuildFix
 from pipeline import recovery
 
 
+class _ExplodingCompletions:
+    def create(self, **kwargs):
+        raise AssertionError("The LLM should not be called when a known fix already exists")
+
+
+class _ExplodingChat:
+    def __init__(self):
+        self.completions = _ExplodingCompletions()
+
+
 class _ExplodingClient:
     """Any call means the fix knowledge base wasn't checked first."""
 
-    def post(self, *args, **kwargs):
-        raise AssertionError("The LLM should not be called when a known fix already exists")
+    def __init__(self):
+        self.chat = _ExplodingChat()
 
 
 def test_known_fix_is_returned_without_calling_the_llm(db_session):

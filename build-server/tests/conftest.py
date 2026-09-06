@@ -4,7 +4,7 @@ from pathlib import Path
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
-os.environ.setdefault("OLLAMA_URL", "http://localhost:11434")
+os.environ.setdefault("QWEN_API_KEY", "test-qwen-key")
 os.environ.setdefault("R2_BUCKET", "test-bucket")
 os.environ.setdefault("R2_ENDPOINT", "http://localhost:9000")
 os.environ.setdefault("R2_ACCESS_KEY", "test-access-key")

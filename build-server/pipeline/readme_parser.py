@@ -2,7 +2,7 @@ import json
 import re
 from typing import Optional
 
-import httpx
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from config import get_settings
@@ -21,28 +21,22 @@ class LLMError(RuntimeError):
     pass
 
 
-def _ollama_generate(model: str, prompt: str, *, client: Optional[httpx.Client] = None) -> str:
+def _qwen_generate(prompt: str, *, client: Optional[OpenAI] = None) -> str:
     settings = get_settings()
-    owns_client = client is None
-    http_client = client or httpx.Client(timeout=settings.llm_timeout_seconds)
 
     try:
-        try:
-            response = http_client.post(
-                f"{settings.ollama_url}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False, "format": "json"},
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise LLMError(f"Ollama request failed: {exc}") from exc
-    finally:
-        if owns_client:
-            http_client.close()
+        active_client = client or OpenAI(api_key=settings.qwen_api_key, base_url=settings.qwen_base_url)
+        completion = active_client.chat.completions.create(
+            model=settings.qwen_model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=settings.llm_timeout_seconds,
+        )
+    except Exception as exc:
+        raise LLMError(f"Qwen request failed: {exc}") from exc
 
-    data = response.json()
-    text = data.get("response", "")
+    text = completion.choices[0].message.content or ""
     if not text:
-        raise LLMError("Ollama returned an empty response")
+        raise LLMError("Qwen returned an empty response")
     return text
 
 
@@ -62,14 +56,13 @@ def _extract_json_object(text: str) -> dict:
     raise LLMError("Could not parse JSON out of the model's response")
 
 
-def parse_readme(readme_text: str, *, client: Optional[httpx.Client] = None) -> ReadmeAnalysis:
-    """Read a project's README with Llama 3.1 8B and extract a build spec.
+def parse_readme(readme_text: str, *, client: Optional[OpenAI] = None) -> ReadmeAnalysis:
+    """Read a project's README with Qwen and extract a build spec.
 
     Falls back to a zero-confidence, minimal-guess analysis whenever the model
     is unreachable or doesn't return parseable JSON - the caller decides what
     to do with low confidence, this function never raises for that reason.
     """
-    settings = get_settings()
     prompt = (
         "You are analyzing the README of a Python project so it can be packaged into a "
         "portable virtual environment bundle. Read the README below and respond with ONLY "
@@ -85,7 +78,7 @@ def parse_readme(readme_text: str, *, client: Optional[httpx.Client] = None) -> 
     )
 
     try:
-        raw = _ollama_generate(settings.ollama_readme_model, prompt, client=client)
+        raw = _qwen_generate(prompt, client=client)
         data = _extract_json_object(raw)
         return ReadmeAnalysis.model_validate(data)
     except (LLMError, ValueError):
