@@ -1,6 +1,7 @@
 services:
   api:
     build: .
+    platform: linux/arm64
     ports:
       - "8000:8000"
     environment:
@@ -22,6 +23,7 @@ services:
 
   worker:
     build: .
+    platform: linux/arm64
     environment:
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+psycopg2://toolbox:toolbox@postgres:5432/toolbox
@@ -44,22 +46,25 @@ services:
 
   redis:
     image: redis:7-alpine
+    platform: linux/arm64
     ports:
       - "6379:6379"
 
   postgres:
     image: postgres:16-alpine
+    platform: linux/arm64
     environment:
       POSTGRES_USER: toolbox
       POSTGRES_PASSWORD: toolbox
       POSTGRES_DB: toolbox
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
   ollama:
     image: ollama/ollama:latest
+    platform: linux/arm64
     ports:
       - "11434:11434"
     volumes:
@@ -67,6 +72,7 @@ services:
 
   ollama-init:
     image: ollama/ollama:latest
+    platform: linux/arm64
     environment:
       OLLAMA_HOST: ollama:11434
     depends_on:
@@ -81,6 +87,7 @@ services:
 
   clamav:
     image: clamav/clamav:latest
+    platform: linux/amd64
     ports:
       - "3310:3310"
     volumes:
