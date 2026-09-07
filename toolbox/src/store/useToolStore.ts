@@ -2,17 +2,17 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
-  BuildErrorEventPayload,
-  BuildInstalledEventPayload,
-  BuildProgressEventPayload,
   BuildStatus,
   BuildStep,
+  INSTALL_STEP_ORDER,
   INSTALL_STEPS,
   OutputLine,
   PipelineSource,
+  RuntimeProgressEventPayload,
   StemFile,
   Tool,
   ToolOutputEventPayload,
+  ToolProgressEventPayload,
   ToolRunState,
   emptyRunState,
 } from "../types";
@@ -60,6 +60,15 @@ interface ToolStore {
   toolRuns: Record<string, ToolRunState>;
   theme: "light" | "dark";
 
+  gitInstalled: boolean | null;
+  runtimeReady: boolean | null;
+  runtimeProgress: RuntimeProgressEventPayload | null;
+
+  checkGit: () => Promise<boolean>;
+  checkRuntime: () => Promise<boolean>;
+  downloadRuntime: () => Promise<void>;
+  listenToRuntimeEvents: () => () => void;
+
   loadTools: () => Promise<void>;
   openTab: (toolId: string) => void;
   closeTab: (toolId: string) => void;
@@ -95,6 +104,53 @@ export const useToolStore = create<ToolStore>((set, get) => ({
   toolRuns: {},
   theme: (typeof document !== "undefined" &&
     (document.documentElement.getAttribute("data-theme") as "light" | "dark")) || "light",
+
+  gitInstalled: null,
+  runtimeReady: null,
+  runtimeProgress: null,
+
+  checkGit: async () => {
+    const installed = await invoke<boolean>("check_git_installed");
+    set({ gitInstalled: installed });
+    return installed;
+  },
+
+  checkRuntime: async () => {
+    const ready = await invoke<boolean>("check_runtime");
+    set({ runtimeReady: ready });
+    return ready;
+  },
+
+  downloadRuntime: async () => {
+    set({
+      runtimeProgress: { step: "downloading", percent: 0, message: "Downloading Python…" },
+    });
+    await invoke("download_runtime");
+  },
+
+  listenToRuntimeEvents: () => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+
+    (async () => {
+      const fn = await listen<RuntimeProgressEventPayload>("runtime:progress", (event) => {
+        set({ runtimeProgress: event.payload });
+        if (event.payload.step === "done") {
+          set({ runtimeReady: true });
+        }
+      });
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  },
 
   loadTools: async () => {
     const raw = await invoke<RawTool[]>("list_tools");
@@ -164,7 +220,7 @@ export const useToolStore = create<ToolStore>((set, get) => ({
       },
     }));
     try {
-      await invoke("request_build", { toolId: tool.id, githubUrl: tool.github_url });
+      await invoke("install_tool", { toolId: tool.id, githubUrl: tool.github_url });
     } catch (err) {
       set((state) => ({
         buildStatuses: {
@@ -391,11 +447,40 @@ export const useToolStore = create<ToolStore>((set, get) => ({
         }
       });
 
-      const progressUnlisten = await listen<BuildProgressEventPayload>("build:progress", (event) => {
-        const { tool_id, step } = event.payload;
+      const progressUnlisten = await listen<ToolProgressEventPayload>("tool:progress", (event) => {
+        const { tool_id, step, message } = event.payload;
+
+        if (step === "ready") {
+          set((state) => ({
+            buildStatuses: {
+              ...state.buildStatuses,
+              [tool_id]: {
+                status: "installed",
+                steps: INSTALL_STEPS.map((label): BuildStep => ({ label, status: "done" })),
+              },
+            },
+          }));
+          get().loadTools();
+          return;
+        }
+
+        if (step === "error") {
+          set((state) => ({
+            buildStatuses: {
+              ...state.buildStatuses,
+              [tool_id]: {
+                status: "error",
+                steps: state.buildStatuses[tool_id]?.steps ?? [],
+                error: message,
+              },
+            },
+          }));
+          return;
+        }
+
         set((state) => {
           const current = state.buildStatuses[tool_id];
-          const stepIndex = INSTALL_STEPS.indexOf(step);
+          const stepIndex = INSTALL_STEP_ORDER.indexOf(step);
           const steps = INSTALL_STEPS.map((label, i) => ({
             label,
             status: i < stepIndex ? "done" : i === stepIndex ? "active" : "pending",
@@ -409,43 +494,11 @@ export const useToolStore = create<ToolStore>((set, get) => ({
         });
       });
 
-      const installedUnlisten = await listen<BuildInstalledEventPayload>("build:installed", (event) => {
-        const { tool_id, exe_path } = event.payload;
-        set((state) => ({
-          buildStatuses: {
-            ...state.buildStatuses,
-            [tool_id]: {
-              status: "installed",
-              steps: INSTALL_STEPS.map((label): BuildStep => ({ label, status: "done" })),
-            },
-          },
-          tools: state.tools.map((t) =>
-            t.id === tool_id ? { ...t, installed: true, exe_path } : t,
-          ),
-        }));
-      });
-
-      const errorUnlisten = await listen<BuildErrorEventPayload>("build:error", (event) => {
-        const { tool_id, error } = event.payload;
-        set((state) => ({
-          buildStatuses: {
-            ...state.buildStatuses,
-            [tool_id]: {
-              status: "error",
-              steps: state.buildStatuses[tool_id]?.steps ?? [],
-              error,
-            },
-          },
-        }));
-      });
-
       if (cancelled) {
         outputUnlisten();
         progressUnlisten();
-        installedUnlisten();
-        errorUnlisten();
       } else {
-        unlisteners = [outputUnlisten, progressUnlisten, installedUnlisten, errorUnlisten];
+        unlisteners = [outputUnlisten, progressUnlisten];
       }
     })();
 

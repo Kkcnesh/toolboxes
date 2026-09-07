@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import shutil
 import subprocess
@@ -15,6 +16,9 @@ from config import get_settings
 from db import Build, BuildRejection, session_scope
 from humanizer import humanize_error
 from pipeline import docker_builder, preflight, readme_parser, recovery, scanner, uploader
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -111,6 +115,8 @@ def execute_build(
         github_url = build.github_url
         platform = build.platform
 
+    logger.info("Starting build pipeline for %s (build_id=%s)", github_url, build_id)
+
     # staging_dir must live under settings.build_workdir specifically, not the
     # container's default temp dir - that path is a volume shared with the
     # clamav service (Step 5 scans it by path over the network), and only the
@@ -127,13 +133,16 @@ def execute_build(
     docker_client = None
 
     try:
+        logger.info("Step 'cloning' starting for %s", github_url)
         _update_build(build_id, status="cloning", current_step="Cloning the repository")
         try:
             clone(github_url, repo_dir)
-        except CloneError:
+        except CloneError as exc:
+            logger.warning("Clone failed for %s: %s", github_url, exc)
             _fail_build(build_id, "We couldn't access that repository. Please check the link and try again.", already_human=True)
             return
 
+        logger.info("Step 'reading' starting for %s", github_url)
         _update_build(build_id, status="reading", current_step="Reading the project's documentation")
         readme_text = read_readme(repo_dir)
         analysis = readme_parser.parse_readme(readme_text, client=llm_client)
@@ -143,16 +152,24 @@ def execute_build(
             analysis.python_version = declared_python_version
 
         if analysis.confidence < settings.readme_confidence_floor:
+            logger.info(
+                "README analysis confidence %.2f below floor %.2f for %s",
+                analysis.confidence,
+                settings.readme_confidence_floor,
+                github_url,
+            )
             _fail_build(build_id, "We couldn't figure out how to run this tool automatically.", already_human=True)
             return
 
         verdict = preflight.classify_repo(repo_dir, readme_text, analysis, github_url=github_url, http_client=github_client)
         if verdict.is_red:
+            logger.info("Preflight rejected %s: %s (%s)", github_url, verdict.reason_code, verdict.reason_human)
             with session_scope() as session:
                 session.add(BuildRejection(github_url=github_url, reason_code=verdict.reason_code, reason_human=verdict.reason_human))
             _fail_build(build_id, verdict.reason_human, already_human=True)
             return
 
+        logger.info("Step 'building' starting for %s", github_url)
         _update_build(build_id, status="building", current_step="Building a virtual environment")
 
         tool_id = derive_tool_id(github_url)
@@ -166,6 +183,14 @@ def execute_build(
         pending_fingerprint: Optional[str] = None
 
         for attempt in range(1, settings.max_build_attempts + 1):
+            logger.info(
+                "Docker build attempt %d/%d for tool_id=%s (python_version=%s, apt_packages=%s)",
+                attempt,
+                settings.max_build_attempts,
+                tool_id,
+                context.python_version,
+                context.apt_packages,
+            )
             outcome = docker_builder.build_bundle(
                 repo_dir=repo_dir,
                 staging_dir=staging_dir,
@@ -176,12 +201,21 @@ def execute_build(
             )
 
             if outcome.success:
+                logger.info("Docker build succeeded for tool_id=%s on attempt %d", tool_id, attempt)
                 if pending_fix is not None and pending_fingerprint is not None:
                     with session_scope() as session:
                         recovery.record_fix_outcome(
                             session, pending_fingerprint, pending_fix.fix_type, pending_fix.fix_payload, success=True
                         )
                 break
+
+            logger.warning(
+                "Docker build attempt %d/%d failed for tool_id=%s: %s",
+                attempt,
+                settings.max_build_attempts,
+                tool_id,
+                outcome.log[-2000:],
+            )
 
             if pending_fix is not None and pending_fingerprint is not None:
                 with session_scope() as session:
@@ -195,11 +229,13 @@ def execute_build(
             with session_scope() as session:
                 fix, _from_kb = recovery.get_fix(session, outcome.log, context.as_dict(), client=llm_client)
 
+            logger.info("Applying recovery fix for tool_id=%s: %s (%s)", tool_id, fix.fix_type, fix.fix_payload)
             context = docker_builder.apply_fix(fix, context, repo_dir)
             pending_fix = fix
             pending_fingerprint = recovery.fingerprint_error(outcome.log)
 
         if outcome is None or not outcome.success:
+            logger.error("All build attempts exhausted for tool_id=%s", tool_id)
             _fail_build(
                 build_id,
                 outcome.log if outcome else "The build failed before it could start.",
@@ -211,17 +247,21 @@ def execute_build(
             staging_dir, tool_id=tool_id, analysis=analysis, apt_packages=apt_packages, platform=platform
         )
 
+        logger.info("Step 'scanning' starting for %s", github_url)
         _update_build(build_id, status="scanning", current_step="Running a safety scan")
         scan_result = scanner.scan_directory(staging_dir / tool_id, send_command=scan_send_command)
         if not scan_result.clean:
+            logger.warning("Safety scan flagged tool_id=%s: %s", tool_id, scan_result.details)
             _fail_build(build_id, "This tool was flagged by our safety scanner and cannot be installed.", already_human=True)
             return
 
+        logger.info("Step 'uploading' starting for %s", github_url)
         _update_build(build_id, status="uploading", current_step="Uploading your tool")
         download_url = uploader.package_and_upload(
             staging_dir, tool_id, s3_client=(s3_client_factory() if s3_client_factory else None)
         )
 
+        logger.info("Build succeeded for %s (build_id=%s): %s", github_url, build_id, download_url)
         _update_build(
             build_id,
             status="success",
@@ -231,8 +271,16 @@ def execute_build(
             finished_at=_now(),
         )
 
-    except Exception as exc:  # last-resort safety net: never leak a raw exception into error_message
+    except Exception as exc:
+        # Full traceback goes to the worker's own logs (docker logs / celery's
+        # own failure reporting) so a real bug is never invisible. error_message
+        # in the DB still only ever gets the humanized, user-safe text - that
+        # guarantee doesn't change. We re-raise after resolving the DB state so
+        # Celery also marks the task failed (with this traceback attached)
+        # instead of silently reporting "succeeded" for a build that blew up.
+        logger.exception("Unhandled error while building %s (build_id=%s)", github_url, build_id)
         _fail_build(build_id, str(exc), llm_client=llm_client)
+        raise
     finally:
         if docker_client is not None:
             try:

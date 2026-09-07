@@ -93,25 +93,27 @@ export interface ToolOutputEventPayload {
   kind: OutputKind;
 }
 
-export interface BuildProgressEventPayload {
+export type ToolInstallStep = "cloning" | "reading" | "installing" | "ready" | "error";
+
+export interface ToolProgressEventPayload {
   tool_id: string;
-  status: "installing" | "installed" | "error";
-  step: string;
+  step: ToolInstallStep;
+  message: string;
 }
 
-export interface BuildInstalledEventPayload {
-  tool_id: string;
-  exe_path: string;
-}
+export type RuntimeStep = "downloading" | "extracting" | "done" | "error";
 
-export interface BuildErrorEventPayload {
-  tool_id: string;
-  error: string;
+export interface RuntimeProgressEventPayload {
+  step: RuntimeStep;
+  percent: number;
+  message: string;
 }
 
 export const INSTALL_STEPS = [
-  "Copying the code…",
-  "Installing the parts…",
-  "Running a safety scan…",
-  "Downloading to your device…",
+  "Downloading the code",
+  "Reading how it works",
+  "Installing the parts",
+  "Getting ready",
 ];
+
+export const INSTALL_STEP_ORDER: ToolInstallStep[] = ["cloning", "reading", "installing", "ready"];

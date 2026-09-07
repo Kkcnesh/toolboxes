@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import re
 import shutil
 import tarfile
@@ -18,6 +19,8 @@ from pydantic import BaseModel
 from config import get_settings
 from pipeline.readme_parser import ReadmeAnalysis
 from pipeline.recovery import FixSuggestion
+
+logger = logging.getLogger(__name__)
 
 BINARY_NAMES_BY_IMPORT: dict[str, list[str]] = {
     "moviepy": ["ffmpeg", "ffprobe"],
@@ -258,6 +261,12 @@ def build_bundle(
     """Build the tool's virtualenv inside a fresh Docker container and extract
     /output into staging_dir/tool_id/. The container (and image) are always
     removed before returning, regardless of outcome."""
+    logger.info(
+        "Starting docker build for tool_id=%s (python_version=%s, apt_packages=%s)",
+        tool_id,
+        context.python_version,
+        context.apt_packages,
+    )
     build_context_dir = Path(tempfile.mkdtemp(prefix=f"{tool_id}-ctx-"))
     log_lines: list[str] = []
 
@@ -273,13 +282,19 @@ def build_bundle(
                 if isinstance(chunk, dict) and chunk.get("stream"):
                     log_lines.append(chunk["stream"])
         except docker.errors.BuildError as exc:
+            # Deliberately not re-raised: a failed `docker build` is an
+            # expected, handled outcome that feeds the AI-recovery retry loop
+            # in worker.py via BuildOutcome.success=False. Raising here would
+            # abort the retry mechanism entirely on the very first failure.
             for chunk in getattr(exc, "build_log", []) or []:
                 if isinstance(chunk, dict) and chunk.get("stream"):
                     log_lines.append(chunk["stream"])
             log_lines.append(str(exc))
+            logger.warning("Docker image build failed for tool_id=%s: %s", tool_id, exc)
             return BuildOutcome(success=False, log="".join(log_lines))
         except docker.errors.APIError as exc:
             log_lines.append(str(exc))
+            logger.warning("Docker API error while building tool_id=%s: %s", tool_id, exc)
             return BuildOutcome(success=False, log="".join(log_lines))
 
         container = None
@@ -297,15 +312,27 @@ def build_bundle(
                     try:
                         _extract_single_file(container, f"/usr/bin/{name}", bin_dir)
                     except docker.errors.NotFound:
+                        logger.debug("Optional binary %s not present in image for tool_id=%s", name, tool_id)
                         continue
+        except Exception as exc:
+            # Same reasoning as the BuildError/APIError branches above: this
+            # used to propagate straight out of build_bundle, past the retry
+            # loop entirely, and up to worker.py's outermost handler - a real
+            # extraction bug would look identical to "build succeeded, then
+            # mysteriously failed" with nothing in between. Converting it into
+            # a BuildOutcome lets the same recovery/failure path handle it.
+            logger.exception("Extracting build output failed for tool_id=%s", tool_id)
+            log_lines.append(f"Extraction failed: {exc}")
+            return BuildOutcome(success=False, log="".join(log_lines))
         finally:
             if container is not None:
                 container.remove(force=True)
             try:
                 docker_client.images.remove(image_tag, force=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not remove build image %s (already gone?): %s", image_tag, exc)
 
+        logger.info("Docker build + extraction succeeded for tool_id=%s", tool_id)
         return BuildOutcome(success=True, log="".join(log_lines))
     finally:
         shutil.rmtree(build_context_dir, ignore_errors=True)
