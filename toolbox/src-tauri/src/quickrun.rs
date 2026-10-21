@@ -848,6 +848,19 @@ fn autorun(
 
     emit_brief(app, research.as_ref());
 
+    // Fetch the usage runbook in the background so it can appear while the app
+    // is still building, rather than only after it is ready.
+    if let Ok(key) = crate::tinyfish::resolve_key(app) {
+        let app_handle = app.clone();
+        let repo_owned = repo.to_string();
+        thread::spawn(move || {
+            if let Ok(runbook) = crate::tinyfish::research_runbook(&key, &repo_owned) {
+                use tauri::Emitter;
+                let _ = app_handle.emit("quickrun:runbook", &runbook);
+            }
+        });
+    }
+
     if let Ok(provider) = crate::ai::resolve_provider(app) {
         let workspace = summary.workspace.clone().unwrap_or_default();
         let detected = summary.config_text.clone().unwrap_or_default();

@@ -16,7 +16,7 @@ use serde_json::Value;
 use tauri::AppHandle;
 
 const ENDPOINT: &str = "https://agent.tinyfish.ai/v1/automation/run";
-const TIMEOUT: Duration = Duration::from_secs(300);
+const TIMEOUT: Duration = Duration::from_secs(150);
 
 /// What the browser agent found, plus where it found it.
 #[derive(Debug, Clone)]

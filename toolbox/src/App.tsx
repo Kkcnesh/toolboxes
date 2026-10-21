@@ -7,6 +7,7 @@ import { ToolPanel } from "./components/ToolPanel/ToolPanel";
 export default function App() {
   const loadTools = useToolStore((s) => s.loadTools);
   const listenToEvents = useToolStore((s) => s.listenToEvents);
+  const toast = useToolStore((s) => s.qrToast);
 
   // The QuickRun workflow does not depend on GitRun's own Python runtime or a
   // bundled git check, so the old startup gate is gone. The legacy tool list and
@@ -26,6 +27,15 @@ export default function App() {
           <ToolPanel />
         </div>
       </div>
+
+      {toast && (
+        <div
+          className="fixed bottom-5 right-5 z-50 rounded-lg border px-3.5 py-2 text-[12px]"
+          style={{ background: "var(--color-surface)", borderColor: "var(--color-border-strong)", color: "var(--color-text)" }}
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

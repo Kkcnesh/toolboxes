@@ -501,6 +501,9 @@ export function Sidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pendingRepo, setPendingRepo] = useState<{ repo: string; name: string } | null>(null);
   const collections = useToolStore((s) => s.qrCollections);
+  const openMarket = useToolStore((s) => s.openMarket);
+  const closeMarket = useToolStore((s) => s.closeMarket);
+  const marketOpen = useToolStore((s) => s.qrMarketOpen);
   const qrWindows = useToolStore((s) => s.qrWindows);
   const qrOpenAppWindow = useToolStore((s) => s.qrOpenAppWindow);
   const qrCloseAppWindow = useToolStore((s) => s.qrCloseAppWindow);
@@ -544,6 +547,9 @@ export function Sidebar() {
         </p>
         <Button variant="primary" onClick={() => setGithubModalOpen(true)}>
           Run a repository
+        </Button>
+        <Button variant="secondary" onClick={() => (marketOpen ? closeMarket() : openMarket())}>
+          {marketOpen ? "Back to tools" : "Marketplace"}
         </Button>
       </div>
 

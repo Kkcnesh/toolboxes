@@ -24,11 +24,16 @@ export function ToolPanel() {
   const marketplaceOpen = useToolStore((s) => s.marketplaceOpen);
   const quickrunOpen = useToolStore((s) => s.quickrunOpen);
   const demoTool = useToolStore((s) => s.qrDemoTool);
+  const marketOpen = useToolStore((s) => s.qrMarketOpen);
   const tools = useToolStore((s) => s.tools);
   const buildStatuses = useToolStore((s) => s.buildStatuses);
 
   if (demoTool) {
     return <DemoToolPanel />;
+  }
+
+  if (marketOpen) {
+    return <Marketplace />;
   }
 
   if (quickrunOpen) {

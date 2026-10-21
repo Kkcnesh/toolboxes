@@ -25,7 +25,8 @@ import {
   ToolRunState,
   emptyRunState,
 } from "../types";
-import { DEFAULT_COLLECTION, DEMO_COLLECTIONS, parseCollectionLink } from "../demo/collections";
+import { DEMO_COLLECTIONS, DEFAULT_COLLECTION, parseCollectionLink } from "../demo/collections";
+import { INCOMING, LISTINGS, REDEEM_CODES, IncomingShare, Listing, OutgoingShare } from "../demo/market";
 
 function loadCollections(): DemoCollection[] {
   try {
@@ -46,6 +47,76 @@ function saveCollections(collections: DemoCollection[]): void {
     // storage unavailable; the in-memory list still works
   }
 }
+
+interface MarketState {
+  premium: boolean;
+  owned: string[];
+  myListings: Listing[];
+  incoming: IncomingShare[];
+  outgoing: OutgoingShare[];
+}
+
+function loadMarket(): MarketState {
+  const fallback: MarketState = {
+    premium: false,
+    owned: [],
+    myListings: [],
+    incoming: INCOMING,
+    outgoing: [],
+  };
+
+  try {
+    const raw = localStorage.getItem("gitrun.market");
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<MarketState>;
+    return {
+      premium: parsed.premium ?? false,
+      owned: parsed.owned ?? [],
+      myListings: parsed.myListings ?? [],
+      incoming: parsed.incoming ?? INCOMING,
+      outgoing: parsed.outgoing ?? [],
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveMarket(state: MarketState): void {
+  try {
+    localStorage.setItem("gitrun.market", JSON.stringify(state));
+  } catch {
+    // storage unavailable; the session still works
+  }
+}
+
+function persistMarket(state: {
+  qrPremium: boolean;
+  qrOwned: string[];
+  qrMyListings: Listing[];
+  qrIncoming: IncomingShare[];
+  qrOutgoing: OutgoingShare[];
+}): void {
+  saveMarket({
+    premium: state.qrPremium,
+    owned: state.qrOwned,
+    myListings: state.qrMyListings,
+    incoming: state.qrIncoming,
+    outgoing: state.qrOutgoing,
+  });
+}
+
+function sharedTool(listing: Listing): DemoTool {
+  return {
+    id: `shared-${listing.id}`,
+    name: listing.name,
+    description: listing.description,
+    category: listing.category,
+    color: listing.color,
+    tag: "Shared",
+  };
+}
+
+const INITIAL_MARKET = loadMarket();
 
 interface RawTool {
   id: string;
@@ -136,6 +207,25 @@ interface ToolStore {
   qrKeyStatus: KeyStatus | null;
   qrLoadKeys: () => Promise<void>;
   qrSaveKey: (provider: string, key: string) => Promise<void>;
+  qrMarketOpen: boolean;
+  openMarket: () => void;
+  closeMarket: () => void;
+  qrMarketTab: "browse" | "shared" | "mine";
+  setMarketTab: (tab: "browse" | "shared" | "mine") => void;
+  qrPremium: boolean;
+  qrOwned: string[];
+  qrMyListings: Listing[];
+  qrIncoming: IncomingShare[];
+  qrOutgoing: OutgoingShare[];
+  qrBuyTool: (id: string) => void;
+  qrActivatePremium: () => void;
+  qrRedeemCode: (code: string) => boolean;
+  qrShareTool: (id: string, to: string) => void;
+  qrAcceptShare: (id: string) => void;
+  qrDeclineShare: (id: string) => void;
+  qrPublishListing: (listing: Listing) => void;
+  qrToast: string | null;
+  qrShowToast: (message: string) => void;
   openQuickRun: () => void;
   closeQuickRun: () => void;
   qrPrepare: (repo: string) => Promise<void>;
@@ -604,6 +694,14 @@ export const useToolStore = create<ToolStore>((set, get) => ({
   quickrunOpen: false,
   qrSettingsOpen: false,
   qrKeyStatus: null,
+  qrMarketOpen: false,
+  qrMarketTab: "browse",
+  qrPremium: INITIAL_MARKET.premium,
+  qrOwned: INITIAL_MARKET.owned,
+  qrMyListings: INITIAL_MARKET.myListings,
+  qrIncoming: INITIAL_MARKET.incoming,
+  qrOutgoing: INITIAL_MARKET.outgoing,
+  qrToast: null,
 
   openQuickRun: () => set({ quickrunOpen: true, marketplaceOpen: false }),
   closeQuickRun: () => set({ quickrunOpen: false }),
@@ -815,6 +913,96 @@ export const useToolStore = create<ToolStore>((set, get) => ({
     }
   },
 
+  openMarket: () => set({ qrMarketOpen: true, qrDemoTool: null, marketplaceOpen: false }),
+  closeMarket: () => set({ qrMarketOpen: false }),
+  setMarketTab: (tab) => set({ qrMarketTab: tab }),
+
+  qrBuyTool: (id) => {
+    if (get().qrOwned.includes(id)) return;
+    set((state) => ({ qrOwned: [...state.qrOwned, id] }));
+    persistMarket(get());
+    get().qrShowToast("Purchased — added to your tools.");
+  },
+
+  qrActivatePremium: () => {
+    set({ qrPremium: true });
+    persistMarket(get());
+    get().qrShowToast("Premium is active.");
+  },
+
+  qrRedeemCode: (code) => {
+    if (!REDEEM_CODES.includes(code.trim().toUpperCase())) return false;
+    set({ qrPremium: true });
+    persistMarket(get());
+    get().qrShowToast("Premium unlocked.");
+    return true;
+  },
+
+  qrShareTool: (id, to) => {
+    const username = to.replace(/^@/, "").trim();
+    if (!username) return;
+    set((state) => ({
+      qrOutgoing: [...state.qrOutgoing, { id: `${id}-${Date.now()}`, listingId: id, to: username }],
+    }));
+    persistMarket(get());
+    get().qrShowToast(`Sent to @${username}.`);
+  },
+
+  qrAcceptShare: (id) => {
+    const share = get().qrIncoming.find((item) => item.id === id);
+    if (!share) return;
+    const listing = LISTINGS.find((item) => item.id === share.listingId);
+
+    set((state) => ({
+      qrIncoming: state.qrIncoming.map((item) =>
+        item.id === id ? { ...item, status: "accepted" as const } : item,
+      ),
+      qrCollections: listing
+        ? state.qrCollections.some((collection) => collection.id === "shared-with-me")
+          ? state.qrCollections.map((collection) =>
+              collection.id === "shared-with-me"
+                ? { ...collection, tools: [...collection.tools, sharedTool(listing)] }
+                : collection,
+            )
+          : [
+              ...state.qrCollections,
+              {
+                id: "shared-with-me",
+                name: "Shared with me",
+                description: "Tools your teammates sent you.",
+                tools: [sharedTool(listing)],
+              },
+            ]
+        : state.qrCollections,
+    }));
+
+    saveCollections(get().qrCollections);
+    persistMarket(get());
+    get().qrShowToast("Added to your tools.");
+  },
+
+  qrDeclineShare: (id) => {
+    set((state) => ({
+      qrIncoming: state.qrIncoming.map((item) =>
+        item.id === id ? { ...item, status: "declined" as const } : item,
+      ),
+    }));
+    persistMarket(get());
+  },
+
+  qrPublishListing: (listing) => {
+    set((state) => ({ qrMyListings: [...state.qrMyListings, listing] }));
+    persistMarket(get());
+    get().qrShowToast("Published to the marketplace.");
+  },
+
+  qrShowToast: (message) => {
+    set({ qrToast: message });
+    window.setTimeout(() => {
+      if (get().qrToast === message) set({ qrToast: null });
+    }, 2200);
+  },
+
   qrSupplyInputs: async () => {
     const id = get().qrSummary?.id;
     if (!id) return;
@@ -892,13 +1080,17 @@ export const useToolStore = create<ToolStore>((set, get) => ({
       const onBrief = await listen<{ summary: string; sources: string[] }>("quickrun:brief", (event) => {
         set({ qrBrief: event.payload });
       });
+      const onRunbook = await listen<Runbook>("quickrun:runbook", (event) => {
+        set({ qrRunbook: event.payload });
+      });
       if (cancelled) {
         onEvent();
         onSummary();
         onStatus();
         onBrief();
+        onRunbook();
       } else {
-        unlistens = [onEvent, onSummary, onStatus, onBrief];
+        unlistens = [onEvent, onSummary, onStatus, onBrief, onRunbook];
       }
     })();
     return () => {

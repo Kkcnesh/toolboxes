@@ -49,6 +49,10 @@ function failureMessage(events: QuickRunEvent[], statusMessage: string | undefin
     return "We couldn't work out how to run this one. It may need a custom setup that isn't supported yet.";
   }
 
+  if (raw.includes("error sending request") || raw.includes("could not reach QuickRun daemon")) {
+    return "We lost contact with the QuickRun engine. It was probably restarting — try again.";
+  }
+
   return raw;
 }
 
@@ -246,6 +250,42 @@ export function QuickRunRun() {
                     {qrBrief.sources.length} source{qrBrief.sources.length === 1 ? "" : "s"}
                   </button>
                 )}
+              </div>
+            )}
+
+            {summary && summary.commands.length > 0 && (
+              <div
+                className="w-full max-w-md rounded-lg border p-3 text-left"
+                style={{ borderColor: "var(--color-border)", background: "var(--color-page)" }}
+              >
+                <div className="mb-1 text-[10.5px]" style={{ color: "var(--color-text-faint)" }}>
+                  What will be done
+                </div>
+                <div className="flex flex-col gap-0.5 font-mono text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                  {summary.commands.slice(0, 5).map((command, index) => (
+                    <div key={index} className="truncate">
+                      {command.command}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {qrRunbook && qrRunbook.steps.length > 0 && (
+              <div
+                className="w-full max-w-md rounded-lg border p-3 text-left text-[12px]"
+                style={{ borderColor: "var(--color-border)", background: "var(--color-page)" }}
+              >
+                <div className="mb-1 text-[10.5px]" style={{ color: "var(--color-text-faint)" }}>
+                  How to use it
+                </div>
+                <ol className="list-decimal pl-4" style={{ color: "var(--color-text-muted)" }}>
+                  {qrRunbook.steps.slice(0, 4).map((step, index) => (
+                    <li key={index} className="mb-0.5">
+                      {step}
+                    </li>
+                  ))}
+                </ol>
               </div>
             )}
           </div>
