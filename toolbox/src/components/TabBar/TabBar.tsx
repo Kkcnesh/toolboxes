@@ -5,6 +5,9 @@ import { ToolIcon } from "../shared/ToolIcon";
 import { ThemeToggle } from "../shared/ThemeToggle";
 import { cn } from "../shared/cn";
 
+// Demo mode: the marketplace "+" entry point is hidden (code retained).
+const SHOW_LEGACY_TOOLS = false;
+
 interface TabProps {
   tool: Tool;
   index: number;
@@ -145,16 +148,18 @@ export function TabBar() {
           );
         })}
       </div>
-      <button
-        onClick={openMarketplace}
-        title="Open the marketplace"
-        className="flex h-full w-10 shrink-0 items-center justify-center text-[16px]"
-        style={{ color: "var(--color-text-muted)" }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-surface-hover)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      >
-        +
-      </button>
+      {SHOW_LEGACY_TOOLS && (
+        <button
+          onClick={openMarketplace}
+          title="Open the marketplace"
+          className="flex h-full w-10 shrink-0 items-center justify-center text-[16px]"
+          style={{ color: "var(--color-text-muted)" }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-surface-hover)")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          +
+        </button>
+      )}
       <ThemeToggle />
     </div>
   );

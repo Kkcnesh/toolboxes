@@ -4,22 +4,17 @@ import { UrlInFileOut } from "../panels/UrlInFileOut";
 import { FileInFilesOut } from "../panels/FileInFilesOut";
 import { InstallFlow } from "../InstallFlow/InstallFlow";
 import { Marketplace } from "../Marketplace/Marketplace";
+import { QuickRunRun } from "../QuickRunRun/QuickRunRun";
+import { DemoToolPanel } from "../DemoToolPanel/DemoToolPanel";
 
 function EmptyState() {
-  const openMarketplace = useToolStore((s) => s.openMarketplace);
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-      <div className="text-[14px] font-medium">Open a tool to get started</div>
+      <div className="text-[14px] font-medium">Run any GitHub repository</div>
       <div className="max-w-xs text-[12.5px]" style={{ color: "var(--color-text-muted)" }}>
-        Pick a tool from the sidebar, or browse the marketplace to add something new.
+        Click "Run a repository" in the sidebar and paste a GitHub URL. QuickRun will detect how to
+        run it and show you the plan before anything executes.
       </div>
-      <button
-        onClick={openMarketplace}
-        className="mt-2 text-[12.5px] underline underline-offset-2"
-        style={{ color: "var(--color-text-muted)" }}
-      >
-        Browse the marketplace
-      </button>
     </div>
   );
 }
@@ -27,8 +22,18 @@ function EmptyState() {
 export function ToolPanel() {
   const activeTabId = useToolStore((s) => s.activeTabId);
   const marketplaceOpen = useToolStore((s) => s.marketplaceOpen);
+  const quickrunOpen = useToolStore((s) => s.quickrunOpen);
+  const demoTool = useToolStore((s) => s.qrDemoTool);
   const tools = useToolStore((s) => s.tools);
   const buildStatuses = useToolStore((s) => s.buildStatuses);
+
+  if (demoTool) {
+    return <DemoToolPanel />;
+  }
+
+  if (quickrunOpen) {
+    return <QuickRunRun />;
+  }
 
   if (marketplaceOpen) {
     return <Marketplace />;

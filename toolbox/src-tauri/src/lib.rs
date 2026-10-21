@@ -11,6 +11,13 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod quickrun;
+mod ai;
+mod tinyfish;
+mod repos;
+mod appwindow;
+mod settings;
+
 const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const OPENROUTER_README_MODEL: &str = "qwen/qwen3.7-flash";
 const OPENROUTER_FIX_MODEL: &str = "qwen/qwen3-coder-30b-a3b-instruct";
@@ -55,9 +62,13 @@ pub struct ToolManifest {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct AppConfig {
+pub(crate) struct AppConfig {
     #[serde(default)]
-    openrouter_api_key: Option<String>,
+    pub(crate) openrouter_api_key: Option<String>,
+    #[serde(default)]
+    pub(crate) deepseek_api_key: Option<String>,
+    #[serde(default)]
+    pub(crate) tinyfish_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -425,7 +436,7 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join("config.json"))
 }
 
-fn load_config(app: &AppHandle) -> AppConfig {
+pub(crate) fn load_config(app: &AppHandle) -> AppConfig {
     config_path(app)
         .ok()
         .and_then(|p| fs::read_to_string(p).ok())
@@ -433,7 +444,7 @@ fn load_config(app: &AppHandle) -> AppConfig {
         .unwrap_or_default()
 }
 
-fn save_config(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
+pub(crate) fn save_config(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
     let path = config_path(app)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|_| "We couldn't save Toolbox's settings.".to_string())?;
@@ -1272,6 +1283,8 @@ pub fn run() {
                 db: Mutex::new(conn),
                 last_output: Mutex::new(HashMap::new()),
             });
+            app.manage(quickrun::DaemonState::default());
+            app.manage(quickrun::AutorunState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1288,6 +1301,22 @@ pub fn run() {
             save_file_dialog,
             get_tool_output_path,
             reveal_in_folder,
+            quickrun::quickrun_ping,
+            quickrun::quickrun_prepare,
+            quickrun::quickrun_local_prepare,
+            quickrun::quickrun_confirm,
+            quickrun::quickrun_supply_inputs,
+            quickrun::quickrun_stop,
+            quickrun::quickrun_state,
+            quickrun::quickrun_stream_events,
+            quickrun::quickrun_autorun,
+            repos::quickrun_list_saved,
+            repos::quickrun_forget_saved,
+            settings::config_key_status,
+            settings::config_set_key,            appwindow::open_app_window,
+            appwindow::close_app_window,
+            quickrun::quickrun_discover_tools,
+            quickrun::quickrun_runbook,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,10 +4,19 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   BuildStatus,
   BuildStep,
+  DemoCollection,
+  DemoTool,
+  DiscoveredTool,
+  Runbook,
+  KeyStatus,
   INSTALL_STEP_ORDER,
   INSTALL_STEPS,
   OutputLine,
   PipelineSource,
+  QuickRunEvent,
+  QuickRunStatus,
+  QuickRunSummary,
+  SavedRepo,
   RuntimeProgressEventPayload,
   StemFile,
   Tool,
@@ -16,6 +25,27 @@ import {
   ToolRunState,
   emptyRunState,
 } from "../types";
+import { DEFAULT_COLLECTION, DEMO_COLLECTIONS, parseCollectionLink } from "../demo/collections";
+
+function loadCollections(): DemoCollection[] {
+  try {
+    const raw = localStorage.getItem("gitrun.collections");
+    if (!raw) return [DEFAULT_COLLECTION];
+    const imported = JSON.parse(raw) as DemoCollection[];
+    return [DEFAULT_COLLECTION, ...(Array.isArray(imported) ? imported : [])];
+  } catch {
+    return [DEFAULT_COLLECTION];
+  }
+}
+
+function saveCollections(collections: DemoCollection[]): void {
+  try {
+    const imported = collections.filter((collection) => collection.id !== "featured");
+    localStorage.setItem("gitrun.collections", JSON.stringify(imported));
+  } catch {
+    // storage unavailable; the in-memory list still works
+  }
+}
 
 interface RawTool {
   id: string;
@@ -87,6 +117,54 @@ interface ToolStore {
   setToolInputUrl: (toolId: string, url: string) => void;
   dismissError: (toolId: string) => void;
   clearPipeline: (toolId: string) => void;
+
+  // --- QuickRun slice (Phase 2) ---
+  qrSummary: QuickRunSummary | null;
+  qrEvents: QuickRunEvent[];
+  qrPreparing: boolean;
+  qrError: string | null;
+  qrInputValues: Record<string, string>;
+  qrStatus: QuickRunStatus | null;
+  qrBrief: { summary: string; sources: string[] } | null;
+  qrSaved: SavedRepo[];
+  qrCurrentRepo: string | null;
+  qrCurrentToken: string | null;
+  quickrunOpen: boolean;
+  qrSettingsOpen: boolean;
+  openSettings: () => void;
+  closeSettings: () => void;
+  qrKeyStatus: KeyStatus | null;
+  qrLoadKeys: () => Promise<void>;
+  qrSaveKey: (provider: string, key: string) => Promise<void>;
+  openQuickRun: () => void;
+  closeQuickRun: () => void;
+  qrPrepare: (repo: string) => Promise<void>;
+  qrAutorun: (repo: string, token?: string | null, rebuild?: boolean) => Promise<void>;
+  qrLoadSaved: () => Promise<void>;
+  qrRunSaved: (repo: string, token?: string | null) => Promise<void>;
+  qrForgetSaved: (repo: string) => Promise<void>;
+  qrOpenAppWindow: (url: string, name?: string) => Promise<void>;
+  qrCloseAppWindow: (url: string) => Promise<void>;
+  qrWindows: { url: string; name: string }[];
+  qrCollections: DemoCollection[];
+  qrDemoTool: { collectionId: string; tool: DemoTool } | null;
+  qrImportCollection: (link: string) => boolean;
+  qrOpenDemoTool: (collectionId: string, tool: DemoTool) => void;
+  qrCloseDemoTool: () => void;
+  qrRemoveCollection: (id: string) => void;
+  qrDiscoverTools: (url: string) => Promise<DiscoveredTool[]>;
+  qrAddDiscoveredCollection: (name: string, tools: DiscoveredTool[]) => void;
+  qrRunbook: Runbook | null;
+  qrLoadRunbook: (repo: string) => Promise<void>;
+  qrSupplyInputs: () => Promise<void>;
+  qrApprove: () => Promise<void>;
+  qrCancel: () => Promise<void>;
+  qrStop: () => Promise<void>;
+  qrResync: () => Promise<void>;
+  qrReset: () => void;
+  qrPushEvent: (event: QuickRunEvent) => void;
+  qrSetInputValue: (id: string, value: string) => void;
+  qrListenEvents: () => () => void;
 }
 
 function getRun(state: ToolStore, toolId: string): ToolRunState {
@@ -505,6 +583,327 @@ export const useToolStore = create<ToolStore>((set, get) => ({
     return () => {
       cancelled = true;
       unlisteners.forEach((fn) => fn());
+    };
+  },
+
+  // --- QuickRun slice (Phase 2/3) ---
+  qrSummary: null,
+  qrEvents: [],
+  qrPreparing: false,
+  qrError: null,
+  qrInputValues: {},
+  qrStatus: null,
+  qrBrief: null,
+  qrRunbook: null,
+  qrSaved: [],
+  qrCollections: loadCollections(),
+  qrWindows: [],
+  qrDemoTool: null,
+  qrCurrentRepo: null,
+  qrCurrentToken: null,
+  quickrunOpen: false,
+  qrSettingsOpen: false,
+  qrKeyStatus: null,
+
+  openQuickRun: () => set({ quickrunOpen: true, marketplaceOpen: false }),
+  closeQuickRun: () => set({ quickrunOpen: false }),
+
+  qrReset: () =>
+    set({
+      qrSummary: null,
+      qrEvents: [],
+      qrError: null,
+      qrPreparing: false,
+      qrInputValues: {},
+      qrStatus: null,
+      qrBrief: null,
+      qrRunbook: null,
+    }),
+
+  qrPushEvent: (event) =>
+    set((state) => {
+      // Keep the summary in sync with the live stream, so progress, the ready
+      // URL, task status and the terminal state update without a full resync.
+      let next = state.qrSummary;
+      if (next) {
+        if (event.kind === "progress" && event.progress) {
+          next = { ...next, progress: event.progress };
+        } else if (event.kind === "info" && event.text.startsWith("open ")) {
+          next = { ...next, url: event.text.slice("open ".length).trim() };
+        } else if (event.kind === "finished") {
+          next = { ...next, state: "succeeded" };
+        } else if (event.kind === "failed") {
+          next = { ...next, state: "failed" };
+        } else if (event.kind === "cancelled") {
+          next = { ...next, state: "cancelled" };
+        } else if (event.task) {
+          const status =
+            event.kind === "taskStarted"
+              ? "starting"
+              : event.kind === "taskReady"
+                ? "ready"
+                : event.kind === "taskExited"
+                  ? "exited"
+                  : null;
+          if (status && next.tasks) {
+            next = {
+              ...next,
+              tasks: next.tasks.map((t) => (t.name === event.task ? { ...t, state: status } : t)),
+            };
+          }
+        }
+      }
+      return { qrEvents: [...state.qrEvents, event], qrSummary: next };
+    }),
+
+  qrSetInputValue: (id, value) =>
+    set((state) => ({ qrInputValues: { ...state.qrInputValues, [id]: value } })),
+
+  qrPrepare: async (repo) => {
+    set({ qrPreparing: true, qrError: null, qrSummary: null, qrEvents: [], qrInputValues: {} });
+    try {
+      const summary = await invoke<QuickRunSummary>("quickrun_prepare", { repo });
+      set({ qrSummary: summary, qrPreparing: false });
+    } catch (err) {
+      set({ qrError: String(err), qrPreparing: false });
+    }
+  },
+
+  qrAutorun: async (repo, token = null, rebuild = false) => {
+    set({
+      qrPreparing: true,
+      qrError: null,
+      qrSummary: null,
+      qrEvents: [],
+      qrInputValues: {},
+      qrStatus: { state: "analyzing", message: "Reading the repository…" },
+      qrBrief: null,
+      qrRunbook: null,
+      qrCurrentRepo: repo,
+      qrCurrentToken: token,
+    });
+    try {
+      // Returns immediately; progress arrives as quickrun:status / :summary / :event.
+      await invoke("quickrun_autorun", { repo, token, rebuild });
+    } catch (err) {
+      set({
+        qrError: String(err),
+        qrPreparing: false,
+        qrStatus: { state: "error", message: String(err) },
+      });
+    }
+  },
+
+  qrLoadSaved: async () => {
+    try {
+      const saved = await invoke<SavedRepo[]>("quickrun_list_saved");
+      set({ qrSaved: saved });
+    } catch {
+      // an empty list is not an error
+    }
+  },
+
+  qrRunSaved: async (repo, token = null) => {
+    await get().qrAutorun(repo, token, false);
+  },
+
+  qrForgetSaved: async (repo) => {
+    try {
+      await invoke("quickrun_forget_saved", { repo });
+    } catch {
+      // ignore
+    }
+    await get().qrLoadSaved();
+  },
+
+  qrOpenAppWindow: async (url, name) => {
+    try {
+      await invoke("open_app_window", { url, name: name ?? null });
+      set((state) =>
+        state.qrWindows.some((window) => window.url === url)
+          ? {}
+          : { qrWindows: [...state.qrWindows, { url, name: name ?? url }] },
+      );
+    } catch {
+      // the browser button still works if a window cannot be created
+    }
+  },
+
+  qrCloseAppWindow: async (url) => {
+    try {
+      await invoke("close_app_window", { url });
+    } catch {
+      // closing an already-closed window is fine
+    }
+    set((state) => ({ qrWindows: state.qrWindows.filter((window) => window.url !== url) }));
+  },
+
+  qrImportCollection: (link) => {
+    const id = parseCollectionLink(link);
+    if (!id) return false;
+    const collection = DEMO_COLLECTIONS[id];
+    if (!collection) return false;
+
+    set((state) =>
+      state.qrCollections.some((existing) => existing.id === id)
+        ? {}
+        : { qrCollections: [...state.qrCollections, collection] },
+    );
+    saveCollections(get().qrCollections);
+    return true;
+  },
+
+  qrOpenDemoTool: (collectionId, tool) =>
+    set({ qrDemoTool: { collectionId, tool }, quickrunOpen: false, marketplaceOpen: false }),
+
+  qrCloseDemoTool: () => set({ qrDemoTool: null }),
+
+  qrRemoveCollection: (id) => {
+    set((state) => ({
+      qrCollections: state.qrCollections.filter((collection) => collection.id !== id),
+      qrDemoTool: state.qrDemoTool?.collectionId === id ? null : state.qrDemoTool,
+    }));
+    saveCollections(get().qrCollections);
+  },
+
+  qrDiscoverTools: async (url) => invoke<DiscoveredTool[]>("quickrun_discover_tools", { url }),
+
+  qrAddDiscoveredCollection: (name, tools) => {
+    const collection: DemoCollection = {
+      id: `discovered-${Date.now()}`,
+      name: name || "Discovered tools",
+      description: `${tools.length} tools found by TinyFish.`,
+      tools: tools.map((tool, index) => ({
+        id: `discovered-${index}-${tool.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        name: tool.name,
+        description: tool.description || "",
+        category: "Discovered",
+        color: "#E6F1FB",
+        tag: "Discovered",
+      })),
+    };
+    set((state) => ({ qrCollections: [...state.qrCollections, collection] }));
+    saveCollections(get().qrCollections);
+  },
+
+  qrLoadRunbook: async (repo) => {
+    try {
+      const runbook = await invoke<Runbook>("quickrun_runbook", { repo });
+      set({ qrRunbook: runbook });
+    } catch (err) {
+      set({ qrError: String(err) });
+    }
+  },
+
+  openSettings: () => set({ qrSettingsOpen: true }),
+  closeSettings: () => set({ qrSettingsOpen: false }),
+
+  qrLoadKeys: async () => {
+    try {
+      const status = await invoke<KeyStatus>("config_key_status");
+      set({ qrKeyStatus: status });
+    } catch {
+      // ignore
+    }
+  },
+
+  qrSaveKey: async (provider, key) => {
+    try {
+      await invoke("config_set_key", { provider, key });
+    } catch (err) {
+      set({ qrError: String(err) });
+    }
+  },
+
+  qrSupplyInputs: async () => {
+    const id = get().qrSummary?.id;
+    if (!id) return;
+    set({ qrError: null });
+    try {
+      const summary = await invoke<QuickRunSummary>("quickrun_supply_inputs", {
+        id,
+        inputs: get().qrInputValues,
+      });
+      set({ qrSummary: summary });
+    } catch (err) {
+      set({ qrError: String(err) });
+    }
+  },
+
+  qrApprove: async () => {
+    const id = get().qrSummary?.id;
+    if (!id) return;
+    set({ qrError: null });
+    try {
+      // The autorun stream is already open; confirm only starts execution.
+      const summary = await invoke<QuickRunSummary>("quickrun_confirm", { id });
+      set({ qrSummary: summary });
+    } catch (err) {
+      set({ qrError: String(err) });
+    }
+  },
+
+  qrCancel: async () => {
+    await get().qrStop();
+  },
+
+  qrStop: async () => {
+    const id = get().qrSummary?.id;
+    if (!id) return;
+    set({ qrError: null });
+    try {
+      await invoke("quickrun_stop", { id });
+    } catch (err) {
+      set({ qrError: String(err) });
+    }
+    await get().qrResync();
+  },
+
+  qrResync: async () => {
+    const id = get().qrSummary?.id;
+    if (!id) return;
+    try {
+      const summary = await invoke<QuickRunSummary>("quickrun_state", { id });
+      set({ qrSummary: summary });
+    } catch (err) {
+      // The daemon may have gone away; surface the error without crashing.
+      set({ qrError: String(err) });
+    }
+  },
+
+  qrListenEvents: () => {
+    let unlistens: UnlistenFn[] = [];
+    let cancelled = false;
+    (async () => {
+      const onEvent = await listen<QuickRunEvent>("quickrun:event", (event) => {
+        get().qrPushEvent(event.payload);
+      });
+      const onSummary = await listen<QuickRunSummary>("quickrun:summary", (event) => {
+        set({ qrSummary: event.payload, qrPreparing: false });
+      });
+      const onStatus = await listen<QuickRunStatus>("quickrun:status", (event) => {
+        set({ qrStatus: event.payload, qrPreparing: false });
+        if (event.payload.state === "done" || event.payload.state === "failed") {
+          const url = get().qrSummary?.url;
+          if (url) get().qrCloseAppWindow(url);
+          get().qrLoadSaved();
+        }
+      });
+      const onBrief = await listen<{ summary: string; sources: string[] }>("quickrun:brief", (event) => {
+        set({ qrBrief: event.payload });
+      });
+      if (cancelled) {
+        onEvent();
+        onSummary();
+        onStatus();
+        onBrief();
+      } else {
+        unlistens = [onEvent, onSummary, onStatus, onBrief];
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlistens.forEach((fn) => fn());
     };
   },
 }));
